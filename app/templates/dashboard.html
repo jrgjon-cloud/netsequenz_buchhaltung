@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GoBD Accounting Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body>
+<div class="container mt-4">
+    <h1 class="mb-4">GoBD Accounting Dashboard</h1>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+            {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+          </div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <div class="row mb-4">
+        <div class="col-md-3">
+            <div class="card text-white bg-success mb-3">
+                <div class="card-header">Income (Net)</div>
+                <div class="card-body">
+                    <h5 class="card-title">{{ "%.2f"|format(income_net) }} €</h5>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-white bg-danger mb-3">
+                <div class="card-header">Expense (Net)</div>
+                <div class="card-body">
+                    <h5 class="card-title">{{ "%.2f"|format(expense_net) }} €</h5>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-white bg-info mb-3">
+                <div class="card-header">VAT Liability</div>
+                <div class="card-body">
+                    <h5 class="card-title">{{ "%.2f"|format(vat_liability) }} €</h5>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-white {{ 'bg-success' if integrity_ok else 'bg-danger' }} mb-3">
+                <div class="card-header">Ledger Status</div>
+                <div class="card-body">
+                    <h5 class="card-title">
+                        {% if integrity_ok %}
+                            GoBD Hash-Kette intakt
+                        {% else %}
+                            Hash-Kette defekt!
+                        {% endif %}
+                    </h5>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row mb-4">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">Filter Transactions</div>
+                <div class="card-body">
+                    <form method="GET" action="{{ url_for('main.dashboard') }}">
+                        <div class="row g-3 align-items-center">
+                            <div class="col-auto">
+                                <input type="number" class="form-control" name="year" value="{{ year }}" placeholder="Year">
+                            </div>
+                            <div class="col-auto">
+                                <select class="form-select" name="direction">
+                                    <option value="">All Types</option>
+                                    <option value="income" {% if request.args.get('direction') == 'income' %}selected{% endif %}>Income</option>
+                                    <option value="expense" {% if request.args.get('direction') == 'expense' %}selected{% endif %}>Expense</option>
+                                </select>
+                            </div>
+                            <div class="col-auto">
+                                <select class="form-select" name="status">
+                                    <option value="">All Statuses</option>
+                                    <option value="review_pending" {% if request.args.get('status') == 'review_pending' %}selected{% endif %}>Pending</option>
+                                    <option value="locked" {% if request.args.get('status') == 'locked' %}selected{% endif %}>Locked</option>
+                                </select>
+                            </div>
+                            <div class="col-auto">
+                                <button type="submit" class="btn btn-primary">Filter</button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+             <div class="card">
+                <div class="card-header">Import CSV (Papierkram Legacy)</div>
+                <div class="card-body">
+                    <form method="POST" action="{{ url_for('main.import_csv') }}" enctype="multipart/form-data">
+                        <div class="mb-3">
+                            <input class="form-control" type="file" name="file" id="csvFile" required>
+                        </div>
+                        <div class="form-check mb-3">
+                            <input class="form-check-input" type="checkbox" name="auto_lock" id="autoLock" value="1">
+                            <label class="form-check-label" for="autoLock">
+                                Importierte Altdaten direkt GoBD-festschreiben
+                            </label>
+                        </div>
+                        <button type="submit" class="btn btn-secondary">Upload</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <h3>Transactions</h3>
+    <table class="table table-striped table-hover">
+        <thead>
+            <tr>
+                <th>ID / Date</th>
+                <th>Counterparty / Description</th>
+                <th>Net Amount</th>
+                <th>Tax</th>
+                <th>Gross</th>
+                <th>Status</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for tx in transactions %}
+            <tr>
+                <td>
+                    <small class="text-muted">{{ tx.source_system.value }} - {{ tx.external_id }}</small><br>
+                    <strong>{{ tx.invoice_date.strftime('%Y-%m-%d') }}</strong>
+                </td>
+                <td>
+                    <strong>{{ tx.counterparty }}</strong><br>
+                    {{ tx.description }}
+                </td>
+                <td class="{% if tx.direction.value == 'income' %}text-success{% else %}text-danger{% endif %}">
+                    {{ "%.2f"|format(tx.amount_net) }} €
+                </td>
+                <td>{{ "%.2f"|format(tx.amount_tax) }} € ({{ "%.2f"|format(tx.tax_rate) }}%)</td>
+                <td>{{ "%.2f"|format(tx.amount_gross) }} €</td>
+                <td>
+                    {% if tx.status.value == 'locked' %}
+                        <span class="badge bg-success">Locked</span>
+                    {% elif tx.status.value == 'review_pending' %}
+                        <span class="badge bg-warning text-dark">Pending</span>
+                    {% else %}
+                        <span class="badge bg-secondary">{{ tx.status.value }}</span>
+                    {% endif %}
+                    {% if tx.storno_of_id %}
+                        <br><span class="badge bg-danger">Storno of #{{ tx.storno_of_id }}</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if tx.status.value == 'review_pending' %}
+                        <form method="POST" action="{{ url_for('main.lock_tx', id=tx.id) }}" class="d-inline">
+                            <button type="submit" class="btn btn-sm btn-success">Lock</button>
+                        </form>
+                    {% elif tx.status.value == 'locked' and not tx.storno_of_id %}
+                        <form method="POST" action="{{ url_for('main.cancel_tx', id=tx.id) }}" class="d-inline">
+                            <input type="hidden" name="reason" value="User cancellation via UI">
+                            <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Are you sure you want to cancel this locked transaction via a Storno booking?')">Cancel</button>
+                        </form>
+                    {% endif %}
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="7" class="text-center">No transactions found for the selected criteria.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

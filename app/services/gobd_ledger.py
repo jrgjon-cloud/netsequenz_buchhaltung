@@ -14,8 +14,11 @@ def calculate_transaction_hash(transaction, previous_hash):
                        f"{transaction.direction.value}|{transaction.invoice_date.isoformat()}|" \
                        f"{transaction.payment_date.isoformat() if transaction.payment_date else ''}|" \
                        f"{transaction.counterparty}|{transaction.description}|" \
-                       f"{transaction.amount_net}|{transaction.tax_rate}|{transaction.amount_tax}|" \
-                       f"{transaction.amount_gross}|{transaction.tax_case}|{previous_hash or ''}"
+                       f"{float(transaction.amount_net):.2f}|{float(transaction.tax_rate):.2f}|" \
+                       f"{float(transaction.amount_tax):.2f}|{float(transaction.amount_gross):.2f}|" \
+                       f"{transaction.tax_case}|{transaction.ustva_kz_base or ''}|" \
+                       f"{transaction.ustva_kz_tax or ''}|{transaction.euer_line or ''}|" \
+                       f"{transaction.storno_of_id or ''}|{previous_hash or ''}"
 
     return hashlib.sha256(canonical_string.encode('utf-8')).hexdigest()
 
@@ -41,14 +44,16 @@ def lock_transaction(transaction_id):
 
     # Find the last locked transaction to get the previous hash
     last_locked = Transaction.query.filter_by(status=TransactionStatus.locked)\
-                                   .order_by(Transaction.locked_at.desc())\
+                                   .order_by(Transaction.lock_sequence.desc())\
                                    .first()
 
     previous_hash = last_locked.record_hash if last_locked else None
+    next_sequence = (last_locked.lock_sequence or 0) + 1 if last_locked else 1
 
     # Update transaction
     transaction.status = TransactionStatus.locked
     transaction.locked_at = datetime.utcnow()
+    transaction.lock_sequence = next_sequence
     transaction.previous_hash = previous_hash
     transaction.record_hash = calculate_transaction_hash(transaction, previous_hash)
 
@@ -69,7 +74,7 @@ def verify_ledger_integrity():
     Iterates through all locked transactions and verifies the hash chain.
     """
     locked_transactions = Transaction.query.filter_by(status=TransactionStatus.locked)\
-                                           .order_by(Transaction.locked_at.asc())\
+                                           .order_by(Transaction.lock_sequence.asc())\
                                            .all()
 
     expected_previous_hash = None
@@ -99,14 +104,18 @@ def cancel_transaction(transaction_id, reason):
     if original_tx.status != TransactionStatus.locked:
         raise ValueError("Only locked transactions can be cancelled via storno")
 
+    existing_storno = Transaction.query.filter_by(storno_of_id=original_tx.id).first()
+    if existing_storno:
+        raise ValueError("Transaction already cancelled")
+
     # Create storno transaction with negative amounts
     storno_tx = Transaction(
         source_system=original_tx.source_system,
         external_id=f"{original_tx.external_id}_STORNO",
         direction=original_tx.direction,
         status=TransactionStatus.review_pending,
-        invoice_date=datetime.utcnow().date(), # or original_tx.invoice_date depending on accounting rules
-        payment_date=datetime.utcnow().date(),
+        invoice_date=original_tx.invoice_date,
+        payment_date=original_tx.payment_date,
         counterparty=original_tx.counterparty,
         description=f"STORNO: {original_tx.description} ({reason})",
         amount_net=-original_tx.amount_net,
@@ -146,16 +155,26 @@ def receive_before_update(mapper, connection, target):
         state = db.inspect(target)
         status_history = state.attrs.status.history
 
-        # If it's already locked and we are not just locking it now
-        if target.status == TransactionStatus.locked and not status_history.added:
-            # Check which fields are modified
-            protected_fields = ['amount_net', 'tax_rate', 'amount_tax', 'amount_gross',
-                                'invoice_date', 'payment_date', 'tax_case', 'direction']
+        # If it's already locked and we are not just locking it now, we shouldn't change the status
+        if target.status != TransactionStatus.locked and TransactionStatus.locked in status_history.deleted:
+            raise ValueError("Cannot unlock a locked transaction")
 
-            for field in protected_fields:
-                history = getattr(state.attrs, field).history
-                if history.has_changes():
-                    raise ValueError(f"Cannot modify financial/tax field '{field}' of a locked transaction")
+        if status_history.added and TransactionStatus.locked not in status_history.added and target.status == TransactionStatus.locked:
+             raise ValueError("Cannot modify the status of a locked transaction")
+
+        if state.attrs.status.history.has_changes() or target.status == TransactionStatus.locked:
+            # If the transaction is locked, or was locked, block updates on protected fields
+            is_locked_update = not status_history.added and target.status == TransactionStatus.locked
+            if is_locked_update:
+                protected_fields = ['amount_net', 'tax_rate', 'amount_tax', 'amount_gross',
+                                    'invoice_date', 'payment_date', 'tax_case', 'direction',
+                                    'counterparty', 'description', 'ustva_kz_base', 'ustva_kz_tax', 'euer_line', 'status']
+
+                for field in protected_fields:
+                    if field == 'status': continue
+                    history = getattr(state.attrs, field).history
+                    if history.has_changes():
+                        raise ValueError(f"Cannot modify financial/tax field '{field}' of a locked transaction")
 
 @event.listens_for(Transaction, 'before_delete')
 def receive_before_delete(mapper, connection, target):

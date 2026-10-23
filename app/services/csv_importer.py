@@ -1,6 +1,8 @@
 import csv
 import io
 import re
+import zipfile
+import hashlib
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from sqlalchemy.exc import IntegrityError
@@ -65,27 +67,42 @@ def import_papierkram_csv(file_stream_or_text, auto_lock=False):
     # Map headers flexibly (case-insensitive)
     def find_column(headers, *keywords):
         headers_lower = [h.lower().strip() for h in headers if h]
-        for h in headers_lower:
-             for kw in keywords:
-                 if kw.lower() in h:
-                     return next((orig_h for orig_h in headers if orig_h.lower().strip() == h), None)
+        # First priority: Exact match
+        for kw in keywords:
+            kw_lower = kw.lower()
+            if kw_lower in headers_lower:
+                idx = headers_lower.index(kw_lower)
+                return headers[idx]
+
+        # Second priority: Substring match
+        for kw in keywords:
+            kw_lower = kw.lower()
+            for i, h in enumerate(headers_lower):
+                if kw_lower in h:
+                    return headers[i]
+
         return None
 
     headers = reader.fieldnames
     if not headers:
          return {"imported": 0, "skipped": 0, "errors": ["Empty CSV"]}
 
-    col_id = find_column(headers, 'belegnummer', 'id', 'external_id')
+    col_id = find_column(headers, 'belegnummer', 'rechnungsnr.', 'rechnungsnummer', 'id', 'external_id')
     col_invoice_date = find_column(headers, 'rechnungsdatum', 'belegdatum', 'datum', 'invoice_date')
-    col_payment_date = find_column(headers, 'zahlungsdatum', 'bezahlt am', 'payment_date')
+    col_payment_date = find_column(headers, 'zahlung am', 'letztes bezahldatum', 'zahlungsdatum', 'bezahlt am', 'payment_date')
     col_direction = find_column(headers, 'typ', 'art', 'direction')
     col_counterparty = find_column(headers, 'kunde', 'lieferant', 'kontakt', 'gegenpartei', 'counterparty')
-    col_description = find_column(headers, 'beschreibung', 'betreff', 'verwendungszweck', 'description')
+    col_description = find_column(headers, 'betreff', 'gegenstand', 'beschreibung', 'verwendungszweck', 'notiz', 'description')
+
     col_amount_net = find_column(headers, 'netto', 'betrag netto', 'amount_net')
     col_tax_rate = find_column(headers, 'steuersatz', 'ust-%', 'tax_rate')
-    col_amount_tax = find_column(headers, 'steuer', 'ust-betrag', 'amount_tax')
+    col_amount_tax = find_column(headers, 'ust.', 'steuer', 'ust-betrag', 'amount_tax')
     col_amount_gross = find_column(headers, 'brutto', 'betrag brutto', 'amount_gross')
-    col_euer_line = find_column(headers, 'eür-zeile', 'kategorie', 'euer_line')
+
+    col_origin = find_column(headers, 'herkunftsort')
+    col_euer_line = find_column(headers, 'kategorien', 'kategorie', 'eür-zeile', 'euer_line')
+    col_note = find_column(headers, 'notiz')
+    col_goods_services = find_column(headers, 'waren & dienstleistungen')
 
     result = {"imported": 0, "skipped": 0, "errors": []}
 
@@ -109,6 +126,30 @@ def import_papierkram_csv(file_stream_or_text, auto_lock=False):
             payment_date_str = row.get(col_payment_date) if col_payment_date else None
             payment_date = parse_date(payment_date_str)
 
+            # Direction and special checks (UStVA refund)
+            euer_line = row.get(col_euer_line) if col_euer_line else None
+            euer_line_str = (euer_line or '').lower()
+
+            # Counterparty & description Fallbacks
+            counterparty = row.get(col_counterparty) if col_counterparty else None
+            description = row.get(col_description) if col_description else None
+
+            if not description:
+                if col_note and row.get(col_note):
+                    description = row.get(col_note)
+                elif col_goods_services and row.get(col_goods_services):
+                    description = row.get(col_goods_services)
+                else:
+                    description = f"Rechnung {external_id}"
+
+            if not counterparty:
+                if 'ustva' in description.lower() or 'finanzamt' in description.lower() or 'ustva' in euer_line_str:
+                    counterparty = 'Finanzamt'
+                elif euer_line:
+                    counterparty = euer_line
+                else:
+                    counterparty = 'Unbekannt'
+
             # Amounts
             amount_net = parse_amount(row.get(col_amount_net) if col_amount_net else None)
             amount_gross = parse_amount(row.get(col_amount_gross) if col_amount_gross else None)
@@ -119,15 +160,28 @@ def import_papierkram_csv(file_stream_or_text, auto_lock=False):
                 tax_rate = parse_amount(tax_rate_str)
             else:
                  if amount_net != Decimal('0'):
-                     tax_rate = (amount_tax / amount_net) * 100
+                     tax_rate = (abs(amount_tax) / abs(amount_net)) * 100
                  else:
                      tax_rate = Decimal('0')
 
+            # Normalize tax_rate (e.g. 19.05% -> 19.00%)
+            if Decimal('18.0') <= tax_rate <= Decimal('20.0'):
+                tax_rate = Decimal('19.00')
+            elif Decimal('6.0') <= tax_rate <= Decimal('8.0'):
+                tax_rate = Decimal('7.00')
+            else:
+                tax_rate = round(tax_rate, 2)
+
             # Direction
             direction_str = str(row.get(col_direction) if col_direction else '').lower()
-            if 'einnahme' in direction_str or 'income' in direction_str:
+
+            is_ust_refund = False
+            if str(external_id).startswith('B-') and 'umsatzsteuervorauszahlung guthaben' in euer_line_str and amount_net > 0:
                 direction = TransactionDirection.income
-            elif 'ausgabe' in direction_str or 'expense' in direction_str:
+                is_ust_refund = True
+            elif 'rechnung' == direction_str or 'einnahme' in direction_str or 'income' in direction_str:
+                direction = TransactionDirection.income
+            elif 'ausgabe' in direction_str or 'expense' in direction_str or 'beleg' in str(external_id).lower():
                 direction = TransactionDirection.expense
             else:
                 # Infer from amounts
@@ -136,21 +190,27 @@ def import_papierkram_csv(file_stream_or_text, auto_lock=False):
                 else:
                     direction = TransactionDirection.income
 
+            # For Belege.csv, negatives mean expenses
+            if str(external_id).startswith('B-') and amount_net < 0 and not is_ust_refund:
+                direction = TransactionDirection.expense
+
             # Normalize amounts to be positive
             amount_net = abs(amount_net)
             amount_gross = abs(amount_gross)
             amount_tax = abs(amount_tax)
 
-            # Counterparty & description
-            counterparty = row.get(col_counterparty) if col_counterparty else 'Unbekannt'
-            description = row.get(col_description) if col_description else 'Keine Beschreibung'
+            origin = str(row.get(col_origin)).lower() if col_origin else ''
 
             # ELSTER logic
             ustva_kz_base = None
             ustva_kz_tax = None
             tax_case = 'other'
 
-            if direction == TransactionDirection.income:
+            if is_ust_refund:
+                tax_case = 'ust_refund'
+            elif direction == TransactionDirection.expense and origin == 'eu' and amount_tax == Decimal('0'):
+                tax_case = 'eu_expense_13b_check'
+            elif direction == TransactionDirection.income:
                  if tax_rate == Decimal('19') or tax_rate == Decimal('19.00'):
                       tax_case = 'standard_19'
                       ustva_kz_base = '81'
@@ -160,8 +220,6 @@ def import_papierkram_csv(file_stream_or_text, auto_lock=False):
             elif direction == TransactionDirection.expense:
                  if tax_rate > 0:
                       ustva_kz_tax = '66'
-
-            euer_line = row.get(col_euer_line) if col_euer_line else None
 
             # Create or update transaction
             existing_tx = Transaction.query.filter_by(
@@ -224,3 +282,55 @@ def import_papierkram_csv(file_stream_or_text, auto_lock=False):
     db.session.commit()
 
     return result
+
+def import_papierkram_zip(zip_bytes_or_file, auto_lock=False):
+    if hasattr(zip_bytes_or_file, 'read'):
+        zf = zipfile.ZipFile(zip_bytes_or_file)
+    else:
+        zf = zipfile.ZipFile(io.BytesIO(zip_bytes_or_file))
+
+    pdf_hashes = {}
+    csv_rechnungen = None
+    csv_belege = None
+
+    for name in zf.namelist():
+        if name.endswith('.pdf'):
+            # Calculate SHA-256
+            data = zf.read(name)
+            sha256_hash = hashlib.sha256(data).hexdigest()
+
+            # Extract prefix for matching (e.g. B-00385 or R-00200)
+            filename = name.split('/')[-1]
+            match = re.search(r'([A-Z]-\d+)', filename)
+            if match:
+                prefix = match.group(1)
+                pdf_hashes[prefix] = sha256_hash
+        elif name.endswith('Rechnungen.csv'):
+            csv_rechnungen = zf.read(name)
+        elif name.endswith('Belege.csv'):
+            csv_belege = zf.read(name)
+
+    result_combined = {"imported": 0, "skipped": 0, "errors": []}
+
+    if csv_rechnungen:
+        res = import_papierkram_csv(csv_rechnungen, auto_lock=auto_lock)
+        result_combined['imported'] += res['imported']
+        result_combined['skipped'] += res['skipped']
+        result_combined['errors'].extend(res['errors'])
+
+    if csv_belege:
+        res = import_papierkram_csv(csv_belege, auto_lock=auto_lock)
+        result_combined['imported'] += res['imported']
+        result_combined['skipped'] += res['skipped']
+        result_combined['errors'].extend(res['errors'])
+
+    # Update transactions with document_sha256
+    if pdf_hashes:
+        for prefix, sha256_hash in pdf_hashes.items():
+            txs = Transaction.query.filter(Transaction.external_id.like(f"%{prefix}%")).all()
+            for tx in txs:
+                if not tx.document_sha256:
+                    tx.document_sha256 = sha256_hash
+        db.session.commit()
+
+    return result_combined

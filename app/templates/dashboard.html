@@ -94,9 +94,9 @@
                 </div>
             </div>
         </div>
-        <div class="col-md-6">
+        <div class="col-md-3">
              <div class="card">
-                <div class="card-header">Import CSV (Papierkram Legacy)</div>
+                <div class="card-header">Import CSV/ZIP</div>
                 <div class="card-body">
                     <form method="POST" action="{{ url_for('main.import_csv') }}" enctype="multipart/form-data">
                         <div class="mb-3">
@@ -105,10 +105,24 @@
                         <div class="form-check mb-3">
                             <input class="form-check-input" type="checkbox" name="auto_lock" id="autoLock" value="1">
                             <label class="form-check-label" for="autoLock">
-                                Importierte Altdaten direkt GoBD-festschreiben
+                                Altdaten direkt GoBD-festschreiben
                             </label>
                         </div>
-                        <button type="submit" class="btn btn-secondary">Upload</button>
+                        <button type="submit" class="btn btn-secondary w-100">Upload</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+             <div class="card">
+                <div class="card-header">Kontakte Konverter (CSV)</div>
+                <div class="card-body">
+                    <form method="POST" action="{{ url_for('main.convert_contacts') }}" enctype="multipart/form-data">
+                        <div class="mb-3">
+                            <input class="form-control" type="file" name="file" id="contactsFile" required>
+                        </div>
+                        <p class="small text-muted mb-3">Konvertiert Papierkram-Kontakte in das Invoice Ninja v5 Format (als Download).</p>
+                        <button type="submit" class="btn btn-info text-white w-100">Konvertieren</button>
                     </form>
                 </div>
             </div>

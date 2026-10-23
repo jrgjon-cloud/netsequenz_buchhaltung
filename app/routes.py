@@ -8,6 +8,27 @@ import datetime
 
 main_bp = Blueprint('main', __name__)
 
+
+from flask import jsonify
+from app.services.gobd_ledger import verify_ledger_integrity
+from app import db
+
+@main_bp.route('/health')
+def healthcheck():
+    try:
+        # Check DB connection
+        db.session.execute(db.text('SELECT 1'))
+
+        # Check Ledger Integrity
+        integrity_ok = verify_ledger_integrity()
+
+        if integrity_ok:
+            return jsonify({"status": "ok", "gobd_integrity": True}), 200
+        else:
+            return jsonify({"status": "error", "message": "Ledger integrity check failed"}), 500
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 @main_bp.route('/')
 def dashboard():
     year = request.args.get('year', datetime.datetime.now().year, type=int)

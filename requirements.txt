@@ -3,3 +3,5 @@ Flask-SQLAlchemy
 Flask-Migrate
 pydantic
 pytest
+gunicorn
+psycopg2-binary

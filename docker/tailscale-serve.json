@@ -1,0 +1,39 @@
+{
+  "TCP": {
+    "443": {
+      "HTTPS": true
+    },
+    "5000": {
+      "HTTPS": true
+    },
+    "8000": {
+      "HTTPS": true
+    },
+    "8080": {
+      "HTTPS": true
+    }
+  },
+  "Web": {
+    "tax-dashboard-server:5000": {
+      "Handlers": {
+        "/": {
+          "Proxy": "http://tax-dashboard:5000"
+        }
+      }
+    },
+    "tax-dashboard-server:8000": {
+      "Handlers": {
+        "/": {
+          "Proxy": "http://paperless-ngx:8000"
+        }
+      }
+    },
+    "tax-dashboard-server:8080": {
+      "Handlers": {
+        "/": {
+          "Proxy": "http://invoiceninja-web:80"
+        }
+      }
+    }
+  }
+}

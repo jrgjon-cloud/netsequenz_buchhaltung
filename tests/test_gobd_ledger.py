@@ -125,9 +125,8 @@ def test_verify_ledger_integrity(app):
 
     assert verify_ledger_integrity() is True
 
-    # Simulate manipulation
-    manipulated_tx = Transaction.query.get(tx1.id)
-    manipulated_tx.record_hash = 'invalidhash'
+    # Simulate manipulation via direct SQL update to bypass ORM listener
+    db.session.execute(db.text("UPDATE transactions SET amount_net = 9999.99 WHERE id = :id"), {"id": tx1.id})
     db.session.commit()
 
     with pytest.raises(ValueError, match="Integrity check failed"):
@@ -183,6 +182,31 @@ def test_prevent_deletion_of_locked_transaction(app):
     with pytest.raises(ValueError, match="Cannot delete a locked transaction"):
         db.session.commit()
 
+def test_prevent_modification_of_status_locked(app):
+    tx = Transaction(
+        source_system=SourceSystem.invoice_ninja,
+        external_id='INV-001',
+        direction=TransactionDirection.income,
+        invoice_date=date(2023, 10, 1),
+        counterparty='Test Client',
+        description='Consulting Services',
+        amount_net=1000.00,
+        tax_rate=19.00,
+        amount_tax=190.00,
+        amount_gross=1190.00,
+        tax_case='standard_19'
+    )
+    db.session.add(tx)
+    db.session.commit()
+
+    lock_transaction(tx.id)
+
+    locked_tx = Transaction.query.get(tx.id)
+    locked_tx.status = TransactionStatus.approved
+
+    with pytest.raises(ValueError, match="Cannot modify the status of a locked transaction|Cannot unlock a locked transaction"):
+        db.session.commit()
+
 def test_cancel_transaction(app):
     tx = Transaction(
         source_system=SourceSystem.invoice_ninja,
@@ -208,7 +232,13 @@ def test_cancel_transaction(app):
     assert storno_tx.storno_of_id == tx.id
     assert storno_tx.amount_net == -1000.00
     assert storno_tx.amount_gross == -1190.00
+    assert storno_tx.invoice_date == tx.invoice_date
+    assert storno_tx.payment_date == tx.payment_date
     assert "STORNO" in storno_tx.description
+
+    # Prevent double storno
+    with pytest.raises(ValueError, match="Transaction already cancelled"):
+        cancel_transaction(tx.id, reason="Another storno")
 
     # Verify ledger integrity holds after storno
     assert verify_ledger_integrity() is True

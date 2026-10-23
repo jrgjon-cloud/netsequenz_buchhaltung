@@ -42,6 +42,7 @@ class Transaction(db.Model):
     document_sha256 = db.Column(db.String(64), nullable=True)
 
     storno_of_id = db.Column(db.Integer, db.ForeignKey('transactions.id'), nullable=True)
+    lock_sequence = db.Column(db.Integer, unique=True, nullable=True)
     locked_at = db.Column(db.DateTime, nullable=True)
     previous_hash = db.Column(db.String(64), nullable=True)
     record_hash = db.Column(db.String(64), unique=True, nullable=True)

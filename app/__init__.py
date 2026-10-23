@@ -15,4 +15,7 @@ def create_app(config_class=Config):
         from app import models
         db.create_all()
 
+    from app.routes import main_bp
+    app.register_blueprint(main_bp)
+
     return app

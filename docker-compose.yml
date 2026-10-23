@@ -37,6 +37,7 @@ services:
       - POSTGRES_DB=tax_dashboard
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./docker/init-postgres.sh:/docker-entrypoint-initdb.d/init.sh:ro
     restart: unless-stopped
 
   db-mariadb:
@@ -118,7 +119,7 @@ services:
       - PAPERLESS_DBHOST=db-postgres
       - PAPERLESS_DBUSER=tax_user
       - PAPERLESS_DBPASS=${POSTGRES_PASSWORD}
-      - PAPERLESS_DBNAME=tax_dashboard
+      - PAPERLESS_DBNAME=paperless
       - PAPERLESS_OCR_LANGUAGE=deu+eng
     volumes:
       - paperless-data:/usr/src/paperless/data

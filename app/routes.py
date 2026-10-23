@@ -1,10 +1,12 @@
-from flask import Blueprint, render_template, request, redirect, url_for, flash, current_app
+from flask import Blueprint, render_template, request, redirect, url_for, flash, current_app, Response
 from app.models import Transaction, TransactionDirection, TransactionStatus
 from app.services.gobd_ledger import lock_transaction, cancel_transaction, verify_ledger_integrity
-from app.services.csv_importer import import_papierkram_csv
+from app.services.csv_importer import import_papierkram_csv, import_papierkram_zip
+from app.services.contact_converter import convert_papierkram_contacts_to_invoiceninja
 from app import db
 from sqlalchemy import extract
 import datetime
+import zipfile
 
 main_bp = Blueprint('main', __name__)
 
@@ -92,7 +94,11 @@ def import_csv():
     auto_lock = 'auto_lock' in request.form
 
     try:
-        result = import_papierkram_csv(file, auto_lock=auto_lock)
+        if file.filename.lower().endswith('.zip'):
+            result = import_papierkram_zip(file, auto_lock=auto_lock)
+        else:
+            result = import_papierkram_csv(file, auto_lock=auto_lock)
+
         flash(f'Import completed: {result["imported"]} imported, {result["skipped"]} skipped.', 'success')
         if result["errors"]:
             for err in result["errors"][:5]: # Show up to 5 errors
@@ -103,6 +109,28 @@ def import_csv():
         flash(f'Import failed: {str(e)}', 'danger')
 
     return redirect(url_for('main.dashboard'))
+
+@main_bp.route('/convert/contacts', methods=['POST'])
+def convert_contacts():
+    if 'file' not in request.files:
+        flash('No file part', 'danger')
+        return redirect(url_for('main.dashboard'))
+
+    file = request.files['file']
+    if file.filename == '':
+        flash('No selected file', 'danger')
+        return redirect(url_for('main.dashboard'))
+
+    try:
+        converted_csv = convert_papierkram_contacts_to_invoiceninja(file)
+        return Response(
+            converted_csv,
+            mimetype="text/csv",
+            headers={"Content-disposition": "attachment; filename=invoiceninja_clients.csv"}
+        )
+    except Exception as e:
+        flash(f'Conversion failed: {str(e)}', 'danger')
+        return redirect(url_for('main.dashboard'))
 
 @main_bp.route('/transactions/<int:id>/lock', methods=['POST'])
 def lock_tx(id):

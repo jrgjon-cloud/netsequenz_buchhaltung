@@ -94,6 +94,35 @@ def verify_ledger_integrity():
     return True
 
 
+def recalculate_hash_chain(start_sequence):
+    """
+    Recalculates the hash chain from a given lock_sequence onwards.
+    Used when a permitted update (e.g. adding payment_date) is made on a locked transaction.
+    """
+    locked_transactions = Transaction.query.filter(
+        Transaction.status == TransactionStatus.locked,
+        Transaction.lock_sequence >= start_sequence
+    ).order_by(Transaction.lock_sequence.asc()).all()
+
+    if not locked_transactions:
+        return
+
+    # To get the initial previous_hash, look at the one before the start_sequence
+    previous_tx = Transaction.query.filter(
+        Transaction.status == TransactionStatus.locked,
+        Transaction.lock_sequence < start_sequence
+    ).order_by(Transaction.lock_sequence.desc()).first()
+
+    current_previous_hash = previous_tx.record_hash if previous_tx else None
+
+    for tx in locked_transactions:
+        tx.previous_hash = current_previous_hash
+        tx.record_hash = calculate_transaction_hash(tx, current_previous_hash)
+        current_previous_hash = tx.record_hash
+
+    db.session.commit()
+
+
 def cancel_transaction(transaction_id, reason):
     """
     Cancels a locked transaction by creating a reverse storno transaction and locking it immediately.
@@ -175,6 +204,9 @@ def receive_before_update(mapper, connection, target):
                     if field == 'status': continue
                     history = getattr(state.attrs, field).history
                     if history.has_changes():
+                        # Exemption for payment_date if it was None
+                        if field == 'payment_date' and history.deleted and history.deleted[0] is None:
+                            continue
                         raise ValueError(f"Cannot modify financial/tax field '{field}' of a locked transaction")
 
 @event.listens_for(Transaction, 'before_delete')

@@ -174,6 +174,50 @@ def sync_from_paperless(paperless_url=None, api_token=None) -> dict:
             if not inv_date:
                 inv_date = datetime.today().date()
 
+            # Fee Deduplication for GoCardless and SumUp
+            counterparty = invoice_data.get('counterparty') or ""
+            title = doc.get('title', "")
+            content = doc.get('content', "")
+            inv_number = invoice_data.get('invoice_number') or ""
+            amount_gross = invoice_data.get('amount_gross', Decimal('0.00'))
+
+            is_fee_doc = False
+            fee_prefix = None
+            if 'gocardless' in counterparty.lower() or 'gocardless' in title.lower() or 'gocardless' in content.lower() or inv_number.startswith('GCSAS'):
+                is_fee_doc = True
+                fee_prefix = 'GC-FEE-%'
+            elif 'sumup' in counterparty.lower() or 'sumup' in title.lower() or 'sumup' in content.lower():
+                is_fee_doc = True
+                fee_prefix = 'SUMUP-FEE-%'
+
+            if is_fee_doc:
+                # Find an existing fee transaction
+                from sqlalchemy import or_, and_, extract
+                # We search for a fee with the exact amount or same month
+                existing_fee = Transaction.query.filter(
+                    Transaction.external_id.like(fee_prefix),
+                    Transaction.document_sha256.is_(None),
+                    or_(
+                        Transaction.amount_gross == amount_gross,
+                        and_(
+                            extract('year', Transaction.invoice_date) == inv_date.year,
+                            extract('month', Transaction.invoice_date) == inv_date.month
+                        )
+                    )
+                ).first()
+
+                if existing_fee:
+                    existing_fee.document_sha256 = document_sha256
+                    existing_fee.description += f" (Beleg {external_id})"
+                    db.session.add(AuditLog(
+                        transaction_id=existing_fee.id,
+                        action='linked_document',
+                        details=f'Linked Paperless document {external_id} to existing fee transaction'
+                    ))
+                    db.session.commit()
+                    result["imported"] += 1
+                    continue
+
             # Create Transaction
             tx = Transaction(
                 source_system=SourceSystem.paperless,
@@ -274,9 +318,51 @@ def upload_receipt_to_paperless_and_ledger(file_bytes, filename, paperless_url=N
     if not inv_date:
         inv_date = datetime.today().date()
 
+    external_id = f"UPLOAD-{document_sha256[:10]}"
+
+    # Fee Deduplication for GoCardless and SumUp
+    counterparty = invoice_data.get('counterparty') or ""
+    title = filename
+    inv_number = invoice_data.get('invoice_number') or ""
+    amount_gross = invoice_data.get('amount_gross', Decimal('0.00'))
+
+    is_fee_doc = False
+    fee_prefix = None
+    if 'gocardless' in counterparty.lower() or 'gocardless' in title.lower() or inv_number.startswith('GCSAS'):
+        is_fee_doc = True
+        fee_prefix = 'GC-FEE-%'
+    elif 'sumup' in counterparty.lower() or 'sumup' in title.lower():
+        is_fee_doc = True
+        fee_prefix = 'SUMUP-FEE-%'
+
+    if is_fee_doc:
+        from sqlalchemy import or_, and_, extract
+        existing_fee = Transaction.query.filter(
+            Transaction.external_id.like(fee_prefix),
+            Transaction.document_sha256.is_(None),
+            or_(
+                Transaction.amount_gross == amount_gross,
+                and_(
+                    extract('year', Transaction.invoice_date) == inv_date.year,
+                    extract('month', Transaction.invoice_date) == inv_date.month
+                )
+            )
+        ).first()
+
+        if existing_fee:
+            existing_fee.document_sha256 = document_sha256
+            existing_fee.description += f" (Beleg {external_id})"
+            db.session.add(AuditLog(
+                transaction_id=existing_fee.id,
+                action='linked_document',
+                details=f'Linked manual upload {external_id} to existing fee transaction'
+            ))
+            db.session.commit()
+            return existing_fee
+
+
     # Create Transaction directly
     # We use a placeholder external_id until it's synced. Using hash for now.
-    external_id = f"UPLOAD-{document_sha256[:10]}"
 
     tx = Transaction(
         source_system=SourceSystem.paperless,

@@ -1,11 +1,14 @@
 from flask import Blueprint, render_template, request, redirect, url_for, flash, current_app, Response
 from app.models import Transaction, TransactionDirection, TransactionStatus
-from app.services.gobd_ledger import lock_transaction, cancel_transaction, verify_ledger_integrity
+from app.services.gobd_ledger import lock_transaction, cancel_transaction, verify_ledger_integrity, recalculate_hash_chain
 from app.services.csv_importer import import_papierkram_csv, import_papierkram_zip
 from app.services.contact_converter import convert_papierkram_contacts_to_invoiceninja
 from app.services.paperless_sync import sync_from_paperless, upload_receipt_to_paperless_and_ledger, fetch_paperless_pdf
-from app.services.invoiceninja_sync import sync_from_invoiceninja, create_invoice_via_cockpit, fetch_invoiceninja_pdf
+from app.services.invoiceninja_sync import sync_from_invoiceninja, create_invoice_via_cockpit, fetch_invoiceninja_pdf, mark_invoiceninja_paid
+from app.models import SourceSystem, AuditLog
 from app.services.payment_poller import poll_payments
+from app.services.tax_calculator import calculate_elster_metrics
+from app.services.z3_exporter import generate_gobd_z3_zip
 from app import db
 from sqlalchemy import extract
 from decimal import Decimal
@@ -74,10 +77,16 @@ def dashboard():
         integrity_ok = False
         flash(f"Ledger Integrity Error: {str(e)}", "danger")
 
+    # Fetch ELSTER Period
+    elster_period = request.args.get('elster_period', 'year')
+    elster_metrics = calculate_elster_metrics(year, elster_period)
+
     return render_template(
         'dashboard.html',
         transactions=transactions,
         year=year,
+        elster_period=elster_period,
+        elster_metrics=elster_metrics,
         income_net=income_net,
         expense_net=expense_net,
         vat_liability=vat_liability,
@@ -95,6 +104,66 @@ def sync_paperless():
     except Exception as e:
         flash(f'Paperless sync failed: {str(e)}', 'danger')
     return redirect(url_for('main.dashboard'))
+
+@main_bp.route('/period/lock', methods=['POST'])
+def lock_period():
+    year = request.form.get('year', type=int)
+    period = request.form.get('period', 'year')
+
+    if not year:
+        flash('Year is required.', 'danger')
+        return redirect(url_for('main.dashboard'))
+
+    transactions_to_lock = Transaction.query.filter(
+        Transaction.status == TransactionStatus.review_pending,
+        Transaction.payment_date.isnot(None),
+        extract('year', Transaction.invoice_date) == year
+    )
+
+    if period != 'year':
+        if period.startswith('Q'):
+            quarter = int(period[1])
+            start_month = (quarter - 1) * 3 + 1
+            end_month = start_month + 2
+            transactions_to_lock = transactions_to_lock.filter(
+                extract('month', Transaction.invoice_date) >= start_month,
+                extract('month', Transaction.invoice_date) <= end_month
+            )
+        else:
+            try:
+                month = int(period)
+                transactions_to_lock = transactions_to_lock.filter(
+                    extract('month', Transaction.invoice_date) == month
+                )
+            except ValueError:
+                pass
+
+    transactions_to_lock = transactions_to_lock.order_by(Transaction.invoice_date.asc()).all()
+
+    locked_count = 0
+    for tx in transactions_to_lock:
+        try:
+            lock_transaction(tx.id)
+            locked_count += 1
+        except Exception as e:
+            flash(f"Error locking transaction {tx.id}: {str(e)}", "danger")
+
+    flash(f'Period locked. {locked_count} transactions secured.', 'success')
+    return redirect(url_for('main.dashboard', year=year, elster_period=period))
+
+@main_bp.route('/export/gobd-z3', methods=['GET'])
+def export_gobd_z3():
+    year = request.args.get('year', datetime.date.today().year, type=int)
+    try:
+        zip_data = generate_gobd_z3_zip(year)
+        return Response(
+            zip_data,
+            mimetype="application/zip",
+            headers={"Content-disposition": f"attachment; filename=gobd_export_{year}.zip"}
+        )
+    except Exception as e:
+        flash(f'Z3 Export failed: {str(e)}', 'danger')
+        return redirect(url_for('main.dashboard', year=year))
 
 @main_bp.route('/upload/receipt', methods=['POST'])
 def upload_receipt():
@@ -291,4 +360,76 @@ def cancel_tx(id):
         flash('Transaction cancelled successfully via Storno.', 'success')
     except Exception as e:
         flash(f'Error cancelling transaction: {str(e)}', 'danger')
+    return redirect(url_for('main.dashboard'))
+
+@main_bp.route('/transactions/<int:id>/mark_paid', methods=['POST'])
+def mark_paid(id):
+    tx = db.session.get(Transaction, id)
+    if not tx:
+        flash('Transaction not found', 'danger')
+        return redirect(url_for('main.dashboard'))
+
+    payment_date_str = request.form.get('payment_date')
+    if payment_date_str:
+        payment_date = datetime.datetime.strptime(payment_date_str, '%Y-%m-%d').date()
+    else:
+        payment_date = datetime.date.today()
+
+    if tx.payment_date is not None and tx.status == TransactionStatus.locked:
+        flash('Payment date is already set and transaction is locked.', 'danger')
+        return redirect(url_for('main.dashboard'))
+
+    was_locked = tx.status == TransactionStatus.locked
+
+    try:
+        tx.payment_date = payment_date
+
+        db.session.add(AuditLog(
+            transaction_id=tx.id,
+            action='marked_paid',
+            details=f'Marked as paid on {payment_date.isoformat()}'
+        ))
+        db.session.commit()
+
+        if was_locked:
+            recalculate_hash_chain(tx.lock_sequence)
+
+        if tx.source_system == SourceSystem.invoice_ninja and current_app.config.get('INVOICE_NINJA_API_TOKEN'):
+            try:
+                mark_invoiceninja_paid(tx.external_id, tx.amount_gross, tx.payment_date)
+            except Exception as ninja_err:
+                flash(f'Transaction marked as paid, but failed to sync to Invoice Ninja: {str(ninja_err)}', 'warning')
+
+        flash(f'Transaction {tx.id} marked as paid on {payment_date}.', 'success')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Error marking transaction as paid: {str(e)}', 'danger')
+
+    return redirect(url_for('main.dashboard'))
+
+@main_bp.route('/transactions/<int:id>/discard', methods=['POST'])
+def discard_tx(id):
+    tx = db.session.get(Transaction, id)
+    if not tx:
+        flash('Transaction not found', 'danger')
+        return redirect(url_for('main.dashboard'))
+
+    if tx.status != TransactionStatus.review_pending:
+        flash('Only review_pending transactions can be discarded.', 'danger')
+        return redirect(url_for('main.dashboard'))
+
+    try:
+        tx_id = tx.id
+        db.session.add(AuditLog(
+            transaction_id=None,
+            action='discarded',
+            details=f'Discarded draft transaction {tx_id} ({tx.external_id})'
+        ))
+        db.session.delete(tx)
+        db.session.commit()
+        flash(f'Transaction {tx_id} discarded.', 'success')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Error discarding transaction: {str(e)}', 'danger')
+
     return redirect(url_for('main.dashboard'))

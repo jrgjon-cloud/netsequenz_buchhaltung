@@ -31,6 +31,129 @@
         </div>
     </div>
 
+    <!-- ELSTER Übersicht & Z3 Export -->
+    <div class="card mb-4 border-info">
+        <div class="card-header bg-info text-white d-flex justify-content-between align-items-center">
+            <h5 class="mb-0">Mein ELSTER Copy & Paste Übersicht</h5>
+            <form method="GET" action="{{ url_for('main.dashboard') }}" class="d-inline d-flex align-items-center gap-2">
+                <input type="hidden" name="year" value="{{ year }}">
+                <select name="elster_period" class="form-select form-select-sm" onchange="this.form.submit()">
+                    <option value="year" {% if elster_period == 'year' %}selected{% endif %}>Gesamtjahr {{ year }}</option>
+                    <option value="Q1" {% if elster_period == 'Q1' %}selected{% endif %}>Q1</option>
+                    <option value="Q2" {% if elster_period == 'Q2' %}selected{% endif %}>Q2</option>
+                    <option value="Q3" {% if elster_period == 'Q3' %}selected{% endif %}>Q3</option>
+                    <option value="Q4" {% if elster_period == 'Q4' %}selected{% endif %}>Q4</option>
+                    {% for m in range(1, 13) %}
+                    <option value="{{ m }}" {% if elster_period == m|string %}selected{% endif %}>{{ m }}</option>
+                    {% endfor %}
+                </select>
+            </form>
+        </div>
+        <div class="card-body">
+            {% if elster_metrics.unpaid_count > 0 %}
+            <div class="alert alert-warning py-1 mb-2">Achtung: Es gibt {{ elster_metrics.unpaid_count }} Buchungen ohne Zahldatum im gewählten Zeitraum. Das Rechnungsdatum wird vorläufig genutzt.</div>
+            {% endif %}
+
+            <div class="row">
+                <!-- UStVA -->
+                <div class="col-md-6 border-end">
+                    <h6>UStVA (Umsatzsteuervoranmeldung)</h6>
+                    <table class="table table-sm table-borderless">
+                        <tbody>
+                            <tr>
+                                <td>Kz 81 (Steuerpfl. Umsätze 19% - Bemessungsgrundlage)</td>
+                                <td class="text-end font-monospace">{{ "%.2f"|format(elster_metrics.kz_81_base) }}</td>
+                                <td><button class="btn btn-sm btn-outline-secondary py-0" onclick="navigator.clipboard.writeText('{{ '%.2f'|format(elster_metrics.kz_81_base) }}')">Kopieren</button></td>
+                            </tr>
+                            <tr>
+                                <td>Kz 86 (Steuerpfl. Umsätze 7% - Bemessungsgrundlage)</td>
+                                <td class="text-end font-monospace">{{ "%.2f"|format(elster_metrics.kz_86_base) }}</td>
+                                <td><button class="btn btn-sm btn-outline-secondary py-0" onclick="navigator.clipboard.writeText('{{ '%.2f'|format(elster_metrics.kz_86_base) }}')">Kopieren</button></td>
+                            </tr>
+                            <tr>
+                                <td>Kz 46 (Leistungsempfänger § 13b - Bemessungsgrundlage)</td>
+                                <td class="text-end font-monospace">{{ "%.2f"|format(elster_metrics.kz_46_base) }}</td>
+                                <td><button class="btn btn-sm btn-outline-secondary py-0" onclick="navigator.clipboard.writeText('{{ '%.2f'|format(elster_metrics.kz_46_base) }}')">Kopieren</button></td>
+                            </tr>
+                            <tr>
+                                <td>Kz 47 (Steuer auf Kz 46)</td>
+                                <td class="text-end font-monospace">{{ "%.2f"|format(elster_metrics.kz_47_tax) }}</td>
+                                <td><button class="btn btn-sm btn-outline-secondary py-0" onclick="navigator.clipboard.writeText('{{ '%.2f'|format(elster_metrics.kz_47_tax) }}')">Kopieren</button></td>
+                            </tr>
+                            <tr>
+                                <td>Kz 66 (Vorsteuer aus Rechnungen)</td>
+                                <td class="text-end font-monospace">{{ "%.2f"|format(elster_metrics.kz_66_vorsteuer) }}</td>
+                                <td><button class="btn btn-sm btn-outline-secondary py-0" onclick="navigator.clipboard.writeText('{{ '%.2f'|format(elster_metrics.kz_66_vorsteuer) }}')">Kopieren</button></td>
+                            </tr>
+                            <tr>
+                                <td>Kz 67 (Vorsteuer nach § 13b UStG)</td>
+                                <td class="text-end font-monospace">{{ "%.2f"|format(elster_metrics.kz_67_vorsteuer_13b) }}</td>
+                                <td><button class="btn btn-sm btn-outline-secondary py-0" onclick="navigator.clipboard.writeText('{{ '%.2f'|format(elster_metrics.kz_67_vorsteuer_13b) }}')">Kopieren</button></td>
+                            </tr>
+                            <tr class="fw-bold">
+                                <td>Kz 83 (Zahllast / Erstattungsanspruch)</td>
+                                <td class="text-end font-monospace">{{ "%.2f"|format(elster_metrics.kz_83_zahllast) }}</td>
+                                <td><button class="btn btn-sm btn-outline-secondary py-0" onclick="navigator.clipboard.writeText('{{ '%.2f'|format(elster_metrics.kz_83_zahllast) }}')">Kopieren</button></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- EÜR -->
+                <div class="col-md-6">
+                    <h6>EÜR (Einnahmen-Überschuss-Rechnung) Netto</h6>
+                    <table class="table table-sm table-borderless">
+                        <tbody>
+                            <tr>
+                                <td>Betriebseinnahmen Netto</td>
+                                <td class="text-end font-monospace text-success">{{ "%.2f"|format(elster_metrics.euer_income_net) }}</td>
+                                <td><button class="btn btn-sm btn-outline-secondary py-0" onclick="navigator.clipboard.writeText('{{ '%.2f'|format(elster_metrics.euer_income_net) }}')">Kopieren</button></td>
+                            </tr>
+                            <tr>
+                                <td>Vereinnahmte Umsatzsteuer</td>
+                                <td class="text-end font-monospace text-success">{{ "%.2f"|format(elster_metrics.euer_vat_collected) }}</td>
+                                <td><button class="btn btn-sm btn-outline-secondary py-0" onclick="navigator.clipboard.writeText('{{ '%.2f'|format(elster_metrics.euer_vat_collected) }}')">Kopieren</button></td>
+                            </tr>
+                            <tr>
+                                <td>Vom FA erstattete Umsatzsteuer</td>
+                                <td class="text-end font-monospace text-success">{{ "%.2f"|format(elster_metrics.euer_vat_refunded) }}</td>
+                                <td><button class="btn btn-sm btn-outline-secondary py-0" onclick="navigator.clipboard.writeText('{{ '%.2f'|format(elster_metrics.euer_vat_refunded) }}')">Kopieren</button></td>
+                            </tr>
+                            {% for line, amount in elster_metrics.euer_expenses_by_line.items() %}
+                            {% if amount > 0 %}
+                            <tr>
+                                <td>Ausgabe: {{ line }}</td>
+                                <td class="text-end font-monospace text-danger">{{ "%.2f"|format(amount) }}</td>
+                                <td><button class="btn btn-sm btn-outline-secondary py-0" onclick="navigator.clipboard.writeText('{{ '%.2f'|format(amount) }}')">Kopieren</button></td>
+                            </tr>
+                            {% endif %}
+                            {% endfor %}
+                            <tr>
+                                <td>Gezahlte Vorsteuer</td>
+                                <td class="text-end font-monospace text-danger">{{ "%.2f"|format(elster_metrics.euer_vat_paid) }}</td>
+                                <td><button class="btn btn-sm btn-outline-secondary py-0" onclick="navigator.clipboard.writeText('{{ '%.2f'|format(elster_metrics.euer_vat_paid) }}')">Kopieren</button></td>
+                            </tr>
+                            <tr class="fw-bold fs-5">
+                                <td>EÜR Gewinn / Verlust</td>
+                                <td class="text-end font-monospace">{{ "%.2f"|format(elster_metrics.euer_profit) }}</td>
+                                <td><button class="btn btn-sm btn-outline-secondary py-0" onclick="navigator.clipboard.writeText('{{ '%.2f'|format(elster_metrics.euer_profit) }}')">Kopieren</button></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <div class="card-footer bg-light d-flex justify-content-between">
+            <form method="POST" action="{{ url_for('main.lock_period') }}" onsubmit="return confirm('Möchten Sie diesen Zeitraum verbindlich für das GoBD-Journal festschreiben?');">
+                <input type="hidden" name="year" value="{{ year }}">
+                <input type="hidden" name="period" value="{{ elster_period }}">
+                <button type="submit" class="btn btn-success">Zeitraum GoBD-festschreiben (Abschluss)</button>
+            </form>
+
+            <a href="{{ url_for('main.export_gobd_z3', year=year) }}" class="btn btn-dark">Z3-Prüfer-Export (ZIP) Herunterladen</a>
+        </div>
+    </div>
+
     <!-- Create Invoice Modal -->
     <div class="modal fade" id="createInvoiceModal" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog">
@@ -239,7 +362,18 @@
                 <td>
                     <small class="text-muted">{{ tx.source_system.value }} - {{ tx.external_id }}</small><br>
                     <strong>Rechnung: {{ tx.invoice_date.strftime('%Y-%m-%d') }}</strong><br>
-                    <small class="text-muted">Bezahlt: {{ tx.payment_date.strftime('%Y-%m-%d') if tx.payment_date else '---' }}</small>
+                    {% if tx.payment_date %}
+                        <small class="text-muted">Bezahlt: {{ tx.payment_date.strftime('%Y-%m-%d') }}</small>
+                    {% elif not tx.storno_of_id %}
+                        <form method="POST" action="{{ url_for('main.mark_paid', id=tx.id) }}" class="d-inline mt-1">
+                            <div class="input-group input-group-sm">
+                                <input type="date" class="form-control" name="payment_date" value="{{ today }}" required style="max-width: 130px;">
+                                <button type="submit" class="btn btn-success">✓ Bezahlt</button>
+                            </div>
+                        </form>
+                    {% else %}
+                        <small class="text-muted">Bezahlt: ---</small>
+                    {% endif %}
                 </td>
                 <td>
                     <strong>{{ tx.counterparty }}</strong><br>
@@ -385,6 +519,11 @@
                                             <button type="submit" name="save_and_lock" value="1" class="btn btn-success">Speichern & GoBD-Festschreiben</button>
                                         </div>
                                     </form>
+                                    {% if tx.status.value == 'review_pending' %}
+                                    <form method="POST" action="{{ url_for('main.discard_tx', id=tx.id) }}" class="mt-2" onsubmit="return confirm('Entwurf verwerfen?');">
+                                        <button type="submit" class="btn btn-danger w-100">Entwurf verwerfen</button>
+                                    </form>
+                                    {% endif %}
                                 </div>
                             </div>
                         </div>

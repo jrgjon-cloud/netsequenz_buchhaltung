@@ -8,7 +8,37 @@
 </head>
 <body>
 <div class="container mt-4">
-    <h1 class="mb-4">GoBD Accounting Dashboard</h1>
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1>NetSequenz Buchhaltungs-Cockpit</h1>
+        <div>
+            <form method="POST" action="{{ url_for('main.sync_paperless') }}" class="d-inline">
+                <button type="submit" class="btn btn-primary">Paperless-ngx Sync</button>
+            </form>
+            <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#uploadModal">
+                Beleg direkt hochladen (PDF/ZUGFeRD)
+            </button>
+        </div>
+    </div>
+
+    <!-- Upload Modal -->
+    <div class="modal fade" id="uploadModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <form method="POST" action="{{ url_for('main.upload_receipt') }}" enctype="multipart/form-data">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Beleg hochladen</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <input class="form-control" type="file" name="file" accept=".pdf,.xml" required>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="submit" class="btn btn-success">Hochladen & Verarbeiten</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
 
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
@@ -133,13 +163,14 @@
     <table class="table table-striped table-hover">
         <thead>
             <tr>
-                <th>ID / Date</th>
-                <th>Counterparty / Description</th>
-                <th>Net Amount</th>
-                <th>Tax</th>
-                <th>Gross</th>
+                <th>ID / Datum</th>
+                <th>Kontakt / Beschreibung</th>
+                <th>Kategorie</th>
+                <th>Netto</th>
+                <th>Steuer</th>
+                <th>Brutto</th>
                 <th>Status</th>
-                <th>Actions</th>
+                <th>Aktionen</th>
             </tr>
         </thead>
         <tbody>
@@ -147,11 +178,18 @@
             <tr>
                 <td>
                     <small class="text-muted">{{ tx.source_system.value }} - {{ tx.external_id }}</small><br>
-                    <strong>{{ tx.invoice_date.strftime('%Y-%m-%d') }}</strong>
+                    <strong>Rechnung: {{ tx.invoice_date.strftime('%Y-%m-%d') }}</strong><br>
+                    <small class="text-muted">Bezahlt: {{ tx.payment_date.strftime('%Y-%m-%d') if tx.payment_date else '---' }}</small>
                 </td>
                 <td>
                     <strong>{{ tx.counterparty }}</strong><br>
                     {{ tx.description }}
+                </td>
+                <td>
+                    {{ tx.euer_line or '---' }}<br>
+                    {% if tx.ustva_kz_base %} <span class="badge bg-info">Kz {{ tx.ustva_kz_base }}</span> {% endif %}
+                    {% if tx.ustva_kz_tax %} <span class="badge bg-secondary">Kz {{ tx.ustva_kz_tax }}</span> {% endif %}
+                    {% if tx.tax_case == 'reverse_charge_13b_eu' %} <span class="badge bg-warning text-dark">§ 13b</span> {% endif %}
                 </td>
                 <td class="{% if tx.direction.value == 'income' %}text-success{% else %}text-danger{% endif %}">
                     {{ "%.2f"|format(tx.amount_net) }} €
@@ -172,9 +210,124 @@
                 </td>
                 <td>
                     {% if tx.status.value == 'review_pending' %}
-                        <form method="POST" action="{{ url_for('main.lock_tx', id=tx.id) }}" class="d-inline">
-                            <button type="submit" class="btn btn-sm btn-success">Lock</button>
-                        </form>
+                        <button type="button" class="btn btn-sm btn-primary mb-1" data-bs-toggle="modal" data-bs-target="#editModal{{ tx.id }}">
+                            Prüfen & Bearbeiten
+                        </button>
+
+                        <!-- Edit/Review Modal -->
+                        <div class="modal fade" id="editModal{{ tx.id }}" tabindex="-1" aria-hidden="true">
+                            <div class="modal-dialog modal-xl">
+                                <div class="modal-content">
+                                    <form method="POST" action="{{ url_for('main.update_transaction', id=tx.id) }}">
+                                        <div class="modal-header">
+                                            <h5 class="modal-title">Buchung prüfen / bearbeiten (ID: {{ tx.id }})</h5>
+                                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                                        </div>
+                                        <div class="modal-body">
+                                            <div class="row">
+                                                <!-- Form (Left) -->
+                                                <div class="col-md-6">
+                                                    <div class="mb-2">
+                                                        <label class="form-label">Kontakt</label>
+                                                        <input type="text" class="form-control" name="counterparty" value="{{ tx.counterparty }}" required>
+                                                    </div>
+                                                    <div class="mb-2">
+                                                        <label class="form-label">Beschreibung</label>
+                                                        <input type="text" class="form-control" name="description" value="{{ tx.description }}" required>
+                                                    </div>
+                                                    <div class="row mb-2">
+                                                        <div class="col">
+                                                            <label class="form-label">Rechnungsdatum</label>
+                                                            <input type="date" class="form-control" name="invoice_date" value="{{ tx.invoice_date.strftime('%Y-%m-%d') }}" required>
+                                                        </div>
+                                                        <div class="col">
+                                                            <label class="form-label">Bezahlt am</label>
+                                                            <input type="date" class="form-control" name="payment_date" value="{{ tx.payment_date.strftime('%Y-%m-%d') if tx.payment_date else '' }}">
+                                                        </div>
+                                                    </div>
+
+                                                    <div class="row mb-2">
+                                                        <div class="col">
+                                                            <label class="form-label">Netto</label>
+                                                            <input type="number" step="0.01" class="form-control" name="amount_net" value="{{ tx.amount_net }}" required>
+                                                        </div>
+                                                        <div class="col">
+                                                            <label class="form-label">Steuer %</label>
+                                                            <input type="number" step="0.01" class="form-control" name="tax_rate" value="{{ tx.tax_rate }}" required>
+                                                        </div>
+                                                        <div class="col">
+                                                            <label class="form-label">Steuerbetrag</label>
+                                                            <input type="number" step="0.01" class="form-control" name="amount_tax" value="{{ tx.amount_tax }}" required>
+                                                        </div>
+                                                        <div class="col">
+                                                            <label class="form-label">Brutto</label>
+                                                            <input type="number" step="0.01" class="form-control" name="amount_gross" value="{{ tx.amount_gross }}" required>
+                                                        </div>
+                                                    </div>
+
+                                                    <div class="mb-2">
+                                                        <label class="form-label">Steuerfall / Kategorie</label>
+                                                        <select class="form-select" name="tax_case">
+                                                            <option value="standard_19" {% if tx.tax_case == 'standard_19' %}selected{% endif %}>Standard 19%</option>
+                                                            <option value="reduced_7" {% if tx.tax_case == 'reduced_7' %}selected{% endif %}>Reduziert 7%</option>
+                                                            <option value="reverse_charge_13b_eu" {% if tx.tax_case == 'reverse_charge_13b_eu' %}selected{% endif %}>Reverse Charge § 13b (EU)</option>
+                                                            <option value="other" {% if tx.tax_case == 'other' %}selected{% endif %}>Sonstiges / Steuerfrei</option>
+                                                        </select>
+                                                    </div>
+
+                                                    <div class="row mb-2">
+                                                        <div class="col">
+                                                            <label class="form-label">EÜR Zeile</label>
+                                                            <select class="form-select" name="euer_line">
+                                                                <option value="">(keine)</option>
+                                                                <option value="Wareneingang" {% if tx.euer_line == 'Wareneingang' %}selected{% endif %}>Wareneingang</option>
+                                                                <option value="Bürobedarf" {% if tx.euer_line == 'Bürobedarf' %}selected{% endif %}>Bürobedarf</option>
+                                                                <option value="Rechts- und Beratungskosten" {% if tx.euer_line == 'Rechts- und Beratungskosten' %}selected{% endif %}>Rechts- und Beratungskosten</option>
+                                                                <option value="Nebenkosten des Geldverkehrs" {% if tx.euer_line == 'Nebenkosten des Geldverkehrs' %}selected{% endif %}>Nebenkosten des Geldverkehrs</option>
+                                                            </select>
+                                                        </div>
+                                                        <div class="col">
+                                                            <label class="form-label">UStVA Basis</label>
+                                                            <input type="text" class="form-control" name="ustva_kz_base" value="{{ tx.ustva_kz_base or '' }}">
+                                                        </div>
+                                                        <div class="col">
+                                                            <label class="form-label">UStVA Steuer</label>
+                                                            <input type="text" class="form-control" name="ustva_kz_tax" value="{{ tx.ustva_kz_tax or '' }}">
+                                                        </div>
+                                                    </div>
+
+                                                    <div class="mb-2 form-check">
+                                                        <input class="form-check-input" type="checkbox" name="recurring_10day_rule" id="10day_{{ tx.id }}" value="1" {% if tx.recurring_10day_rule %}checked{% endif %}>
+                                                        <label class="form-check-label" for="10day_{{ tx.id }}">
+                                                            Wiederkehrende Ausgabe (10-Tage-Regel § 11 EStG)
+                                                        </label>
+                                                    </div>
+                                                </div>
+
+                                                <!-- PDF View (Right) -->
+                                                <div class="col-md-6">
+                                                    {% if tx.source_system.value == 'paperless' %}
+                                                        <iframe src="{{ url_for('main.get_transaction_pdf', id=tx.id) }}" width="100%" height="600px" style="border:1px solid #ccc;"></iframe>
+                                                    {% else %}
+                                                        <div class="alert alert-info">Keine Live-Vorschau verfügbar für {{ tx.source_system.value }}</div>
+                                                    {% endif %}
+                                                    {% if tx.document_sha256 %}
+                                                        <div class="mt-2 text-muted small" style="word-break: break-all;">
+                                                            <strong>SHA256:</strong> {{ tx.document_sha256 }}
+                                                        </div>
+                                                    {% endif %}
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="modal-footer">
+                                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Abbrechen</button>
+                                            <button type="submit" class="btn btn-info">Nur Speichern</button>
+                                            <button type="submit" name="save_and_lock" value="1" class="btn btn-success">Speichern & GoBD-Festschreiben</button>
+                                        </div>
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
                     {% elif tx.status.value == 'locked' and not tx.storno_of_id %}
                         <form method="POST" action="{{ url_for('main.cancel_tx', id=tx.id) }}" class="d-inline">
                             <input type="hidden" name="reason" value="User cancellation via UI">

@@ -5,3 +5,5 @@ pydantic
 pytest
 gunicorn
 psycopg2-binary
+pypdf
+requests

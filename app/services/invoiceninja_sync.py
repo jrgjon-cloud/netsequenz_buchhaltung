@@ -186,6 +186,40 @@ def sync_from_invoiceninja(base_url=None, api_token=None):
     return results
 
 
+def mark_invoiceninja_paid(external_id: str, amount: Decimal, payment_date: datetime.date, base_url=None, api_token=None):
+    """
+    Marks an invoice as paid in Invoice Ninja via the Payments API.
+    """
+    url, headers = get_invoiceninja_client(base_url, api_token)
+    if not url or not headers.get('X-Api-Token'):
+        return None
+
+    # external_id is usually something like 'INV-001' or 'R-00209'
+    # We need to find the internal invoice ID first
+    invoices_resp = requests.get(f"{url}/api/v1/invoices?number={external_id}", headers=headers)
+    invoices_resp.raise_for_status()
+    invoices_data = invoices_resp.json().get('data', [])
+
+    if not invoices_data:
+        raise ValueError(f"Invoice {external_id} not found in Invoice Ninja")
+
+    invoice_id = invoices_data[0]['id']
+
+    payload = {
+        "amount": float(amount),
+        "date": payment_date.strftime("%Y-%m-%d"),
+        "invoices": [
+            {
+                "invoice_id": invoice_id,
+                "amount": float(amount)
+            }
+        ]
+    }
+
+    resp = requests.post(f"{url}/api/v1/payments", json=payload, headers=headers)
+    resp.raise_for_status()
+    return resp.json()
+
 def create_invoice_via_cockpit(client_name, client_email, subject, item_description, amount_net, tax_rate=Decimal('19.00'), due_days=14, base_url=None, api_token=None):
     if base_url is None:
         base_url = current_app.config.get('INVOICE_NINJA_URL', 'http://invoiceninja-web:80')

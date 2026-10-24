@@ -18,7 +18,8 @@ def calculate_transaction_hash(transaction, previous_hash):
                        f"{float(transaction.amount_tax):.2f}|{float(transaction.amount_gross):.2f}|" \
                        f"{transaction.tax_case}|{transaction.ustva_kz_base or ''}|" \
                        f"{transaction.ustva_kz_tax or ''}|{transaction.euer_line or ''}|" \
-                       f"{transaction.storno_of_id or ''}|{previous_hash or ''}"
+                       f"{transaction.storno_of_id or ''}|{transaction.document_sha256 or ''}|" \
+                       f"{previous_hash or ''}"
 
     return hashlib.sha256(canonical_string.encode('utf-8')).hexdigest()
 

@@ -48,7 +48,7 @@ def parse_amount(amount_str):
     except InvalidOperation:
         return Decimal('0.00')
 
-def import_papierkram_csv(file_stream_or_text, auto_lock=False):
+def import_papierkram_csv(file_stream_or_text, auto_lock=False, pdf_hashes=None):
     if isinstance(file_stream_or_text, bytes):
         content = file_stream_or_text.decode('utf-8')
     elif hasattr(file_stream_or_text, 'read'):
@@ -249,6 +249,14 @@ def import_papierkram_csv(file_stream_or_text, auto_lock=False):
                 ustva_kz_tax=ustva_kz_tax,
                 euer_line=euer_line
             )
+
+            # Set document_sha256 if found in pdf_hashes
+            if pdf_hashes and isinstance(external_id, str):
+                for prefix, sha_hash in pdf_hashes.items():
+                    if prefix in external_id:
+                        tx.document_sha256 = sha_hash
+                        break
+
             db.session.add(tx)
             db.session.flush() # Get ID for audit log
 
@@ -313,24 +321,15 @@ def import_papierkram_zip(zip_bytes_or_file, auto_lock=False):
     result_combined = {"imported": 0, "skipped": 0, "errors": []}
 
     if csv_rechnungen:
-        res = import_papierkram_csv(csv_rechnungen, auto_lock=auto_lock)
+        res = import_papierkram_csv(csv_rechnungen, auto_lock=auto_lock, pdf_hashes=pdf_hashes)
         result_combined['imported'] += res['imported']
         result_combined['skipped'] += res['skipped']
         result_combined['errors'].extend(res['errors'])
 
     if csv_belege:
-        res = import_papierkram_csv(csv_belege, auto_lock=auto_lock)
+        res = import_papierkram_csv(csv_belege, auto_lock=auto_lock, pdf_hashes=pdf_hashes)
         result_combined['imported'] += res['imported']
         result_combined['skipped'] += res['skipped']
         result_combined['errors'].extend(res['errors'])
-
-    # Update transactions with document_sha256
-    if pdf_hashes:
-        for prefix, sha256_hash in pdf_hashes.items():
-            txs = Transaction.query.filter(Transaction.external_id.like(f"%{prefix}%")).all()
-            for tx in txs:
-                if not tx.document_sha256:
-                    tx.document_sha256 = sha256_hash
-        db.session.commit()
 
     return result_combined

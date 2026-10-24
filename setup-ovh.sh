@@ -79,7 +79,7 @@ ENV_EOF
 chmod 600 .env
 echo "Die Datei .env wurde erfolgreich erstellt (chmod 600)."
 
-sed -i "s/\"tax-dashboard-server.tailxxxx.ts.net\"/\"$TS_CERT_DOMAIN\"/g" docker/tailscale-serve.json
+sed -i "s/tax-dashboard-server:/${TS_CERT_DOMAIN}:/g" docker/tailscale-serve.json
 echo "tailscale-serve.json wurde angepasst."
 
 echo "Starte Tailscale-Container..."

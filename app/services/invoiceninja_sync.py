@@ -8,6 +8,17 @@ import hashlib
 import dateutil.parser
 import json
 
+def get_invoiceninja_client(base_url=None, api_token=None):
+    url = base_url or current_app.config.get('INVOICE_NINJA_URL', 'http://invoiceninja-web:80')
+    token = api_token or current_app.config.get('INVOICE_NINJA_API_TOKEN', '')
+
+    headers = {
+        'X-API-Token': token,
+        'X-Requested-With': 'XMLHttpRequest'
+    }
+
+    return url, headers
+
 def _parse_date(date_str):
     if not date_str:
         return None

@@ -81,6 +81,8 @@ def dashboard():
     elster_period = request.args.get('elster_period', 'year')
     elster_metrics = calculate_elster_metrics(year, elster_period)
 
+    today = datetime.date.today().isoformat()
+
     return render_template(
         'dashboard.html',
         transactions=transactions,
@@ -90,7 +92,11 @@ def dashboard():
         income_net=income_net,
         expense_net=expense_net,
         vat_liability=vat_liability,
-        integrity_ok=integrity_ok
+        integrity_ok=integrity_ok,
+        today=today,
+        SourceSystem=SourceSystem,
+        TransactionDirection=TransactionDirection,
+        TransactionStatus=TransactionStatus
     )
 
 @main_bp.route('/sync/paperless', methods=['POST'])

@@ -86,8 +86,12 @@ def calculate_elster_metrics(year: int, period: str = 'year', only_locked: bool 
         # Calculate UStVA Kennziffern
         if tx.direction == TransactionDirection.income:
             total_income_gross += tx.amount_gross
-            euer_income_net += tx.amount_net
             euer_vat_collected += tx.amount_tax
+
+            if tx.tax_case == 'ust_refund':
+                euer_vat_refunded += tx.amount_net
+            else:
+                euer_income_net += tx.amount_net
 
             if tx.ustva_kz_base == '81' or tx.tax_case == 'standard_19':
                 kz_81_base += tx.amount_net
@@ -95,9 +99,6 @@ def calculate_elster_metrics(year: int, period: str = 'year', only_locked: bool 
             elif tx.ustva_kz_base == '86' or tx.tax_case == 'reduced_7':
                 kz_86_base += tx.amount_net
                 kz_86_tax += tx.amount_tax
-
-            if tx.tax_case == 'ust_refund':
-                euer_vat_refunded += tx.amount_net
 
         elif tx.direction == TransactionDirection.expense:
             total_expense_gross += tx.amount_gross

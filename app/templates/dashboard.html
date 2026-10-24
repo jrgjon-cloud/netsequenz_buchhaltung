@@ -500,7 +500,7 @@
 
                                                 <!-- PDF View (Right) -->
                                                 <div class="col-md-6">
-                                                    {% if tx.source_system.value == 'paperless' %}
+                                                    {% if tx.source_system.value in ['paperless', 'invoice_ninja'] %}
                                                         <iframe src="{{ url_for('main.get_transaction_pdf', id=tx.id) }}" width="100%" height="600px" style="border:1px solid #ccc;"></iframe>
                                                     {% else %}
                                                         <div class="alert alert-info">Keine Live-Vorschau verfügbar für {{ tx.source_system.value }}</div>
@@ -537,7 +537,7 @@
             </tr>
             {% else %}
             <tr>
-                <td colspan="7" class="text-center">No transactions found for the selected criteria.</td>
+                <td colspan="8" class="text-center">No transactions found for the selected criteria.</td>
             </tr>
             {% endfor %}
         </tbody>

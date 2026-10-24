@@ -11,12 +11,72 @@
     <div class="d-flex justify-content-between align-items-center mb-4">
         <h1>NetSequenz Buchhaltungs-Cockpit</h1>
         <div>
-            <form method="POST" action="{{ url_for('main.sync_paperless') }}" class="d-inline">
+            <a href="{{ config.PAPERLESS_PUBLIC_URL }}" target="_blank" class="btn btn-outline-secondary">Paperless-ngx öffnen ↗</a>
+            <a href="{{ config.INVOICE_NINJA_PUBLIC_URL }}" target="_blank" class="btn btn-outline-secondary">Invoice Ninja öffnen ↗</a>
+            <form method="POST" action="{{ url_for('main.sync_paperless') }}" class="d-inline ms-2">
                 <button type="submit" class="btn btn-primary">Paperless-ngx Sync</button>
             </form>
-            <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#uploadModal">
+            <form method="POST" action="{{ url_for('main.sync_invoiceninja_route') }}" class="d-inline ms-2">
+                <button type="submit" class="btn btn-primary">Invoice Ninja Sync</button>
+            </form>
+            <form method="POST" action="{{ url_for('main.sync_payments_route') }}" class="d-inline ms-2">
+                <button type="submit" class="btn btn-warning">Zahlungen & Gebühren abrufen (GoCardless / SumUp)</button>
+            </form>
+            <button type="button" class="btn btn-info ms-2" data-bs-toggle="modal" data-bs-target="#createInvoiceModal">
+                + Neue Rechnung schreiben
+            </button>
+            <button type="button" class="btn btn-success ms-2" data-bs-toggle="modal" data-bs-target="#uploadModal">
                 Beleg direkt hochladen (PDF/ZUGFeRD)
             </button>
+        </div>
+    </div>
+
+    <!-- Create Invoice Modal -->
+    <div class="modal fade" id="createInvoiceModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <form method="POST" action="{{ url_for('main.create_invoice_route') }}">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Neue Rechnung schreiben</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label class="form-label">Kundenname</label>
+                            <input type="text" class="form-control" name="client_name" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">E-Mail</label>
+                            <input type="email" class="form-control" name="client_email" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Betreff</label>
+                            <input type="text" class="form-control" name="subject" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Leistungsbeschreibung</label>
+                            <input type="text" class="form-control" name="item_description" required>
+                        </div>
+                        <div class="row mb-3">
+                            <div class="col">
+                                <label class="form-label">Netto-Betrag</label>
+                                <input type="number" step="0.01" class="form-control" name="amount_net" required>
+                            </div>
+                            <div class="col">
+                                <label class="form-label">Steuersatz</label>
+                                <select class="form-select" name="tax_rate">
+                                    <option value="19.00">19%</option>
+                                    <option value="7.00">7%</option>
+                                    <option value="0.00">0%</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="submit" class="btn btn-info">Rechnung erstellen</button>
+                    </div>
+                </form>
+            </div>
         </div>
     </div>
 

@@ -4,8 +4,11 @@ from app.services.gobd_ledger import lock_transaction, cancel_transaction, verif
 from app.services.csv_importer import import_papierkram_csv, import_papierkram_zip
 from app.services.contact_converter import convert_papierkram_contacts_to_invoiceninja
 from app.services.paperless_sync import sync_from_paperless, upload_receipt_to_paperless_and_ledger, fetch_paperless_pdf
+from app.services.invoiceninja_sync import sync_from_invoiceninja, create_invoice_via_cockpit, fetch_invoiceninja_pdf
+from app.services.payment_poller import poll_payments
 from app import db
 from sqlalchemy import extract
+from decimal import Decimal
 import datetime
 import zipfile
 
@@ -168,14 +171,63 @@ def convert_contacts():
 @main_bp.route('/transactions/<int:id>/pdf')
 def get_transaction_pdf(id):
     tx = db.session.get(Transaction, id)
-    if not tx or tx.source_system.value != 'paperless':
+    if not tx:
+        return "Transaction not found", 404
+
+    if tx.source_system.value == 'paperless':
+        pdf_bytes = fetch_paperless_pdf(tx.external_id)
+        if not pdf_bytes:
+            return "Could not fetch PDF from Paperless", 404
+        return Response(pdf_bytes, mimetype='application/pdf', headers={'Content-Disposition': 'inline'})
+    elif tx.source_system.value == 'invoice_ninja':
+        pdf_bytes = fetch_invoiceninja_pdf(tx.external_id)
+        if not pdf_bytes:
+            return "Could not fetch PDF from Invoice Ninja", 404
+        return Response(pdf_bytes, mimetype='application/pdf', headers={'Content-Disposition': 'inline'})
+    else:
         return "PDF not available for this transaction", 404
 
-    pdf_bytes = fetch_paperless_pdf(tx.external_id)
-    if not pdf_bytes:
-        return "Could not fetch PDF from Paperless", 404
+@main_bp.route('/sync/invoiceninja', methods=['POST'])
+def sync_invoiceninja_route():
+    results = sync_from_invoiceninja()
+    if results.get('errors'):
+        for err in results['errors']:
+            flash(err, 'danger')
+    flash(f"Invoice Ninja Sync abgeschlossen: {results.get('created', 0)} erstellt, {results.get('updated', 0)} aktualisiert.", 'success')
+    return redirect(url_for('main.dashboard'))
 
-    return Response(pdf_bytes, mimetype='application/pdf', headers={'Content-Disposition': 'inline'})
+@main_bp.route('/invoices/create', methods=['POST'])
+def create_invoice_route():
+    client_name = request.form.get('client_name')
+    client_email = request.form.get('client_email')
+    subject = request.form.get('subject')
+    item_description = request.form.get('item_description')
+    amount_net = Decimal(request.form.get('amount_net', '0.00'))
+    tax_rate = Decimal(request.form.get('tax_rate', '19.00'))
+
+    try:
+        tx = create_invoice_via_cockpit(
+            client_name=client_name,
+            client_email=client_email,
+            subject=subject,
+            item_description=item_description,
+            amount_net=amount_net,
+            tax_rate=tax_rate
+        )
+        flash(f"Rechnung erfolgreich erstellt ({tx.external_id}).", 'success')
+    except Exception as e:
+        flash(f"Fehler beim Erstellen der Rechnung: {str(e)}", 'danger')
+
+    return redirect(url_for('main.dashboard'))
+
+@main_bp.route('/sync/payments', methods=['POST'])
+def sync_payments_route():
+    results = poll_payments()
+    if results.get('errors'):
+        for err in results['errors']:
+            flash(err, 'danger')
+    flash(f"Zahlungsabgleich abgeschlossen: {results.get('matched_invoices', 0)} Rechnungen gematcht, {results.get('fees_created', 0)} Gebühren erfasst.", 'success')
+    return redirect(url_for('main.dashboard'))
 
 @main_bp.route('/transactions/<int:id>/update', methods=['POST'])
 def update_transaction(id):
